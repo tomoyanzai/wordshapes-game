@@ -1,53 +1,39 @@
-export type CefrLevel = 'A1' | 'A2' | 'B1'
+export type ShapeClass = 'tall' | 'small' | 'tail'
 
-export interface IconicInfo {
-  /** One-line playful mnemonic, e.g. "b and d are the bed posts!" */
-  hint: string
-  /** 0-based indices into `word` of the letters that resemble the meaning */
-  letterIndices: number[]
-}
+export type Mark = 'hit' | 'near' | 'miss'
 
-export interface Word {
-  /** Stable slug (the word itself) — never renumbered, keys saved progress */
-  id: string
+export interface Puzzle {
+  /** 4–7 lowercase a-z letters */
   word: string
-  definition: string
-  emoji: string
+  /** One-line, crossword-crisp definition. Never contains the answer. */
+  clue: string
   exampleSentence: string
-  cefrLevel: CefrLevel
-  tags: string[]
-  iconic?: IconicInfo
-  /** Future glosses, e.g. { ja: "ベッド" } — empty for MVP */
+  /** Rough difficulty tag, shown in the dossier for learners */
+  level: 'A2' | 'B1' | 'B2' | 'C1'
+  /** Why the word's shape fits its meaning — shown when the word is iconic */
+  shapeNote?: string
+  /** 0-based letters that carry the shape-meaning resemblance */
+  iconicIndices?: number[]
+  /** Future first-language glosses, e.g. { ja: "にじむ" } */
   translations: Record<string, string>
 }
 
-export interface WordProgress {
-  /** Leitner box 1..5 (5 = mastered) */
-  box: number
-  /** Local day number (days since epoch) when the word is due again */
-  nextDueDay: number
-  timesSeen: number
-  timesCorrect: number
-  firstSeenDay: number
+export interface Stats {
+  played: number
+  won: number
+  currentStreak: number
+  maxStreak: number
+  /** dist[i] = wins in i+1 guesses */
+  dist: [number, number, number, number, number, number]
+  lastWonPuzzle: number | null
+  lastPlayedPuzzle: number | null
 }
 
-export interface PlayerState {
-  version: 1
-  xp: number
-  streak: number
-  bestStreak: number
-  /** Local "YYYY-MM-DD" of the last completed daily pack */
-  lastCompletedPackDate: string | null
-  wordProgress: Record<string, WordProgress>
-  settings: { reducedMotion: boolean }
-}
+export type GameStatus = 'playing' | 'won' | 'lost'
 
-export type QuestionType = 'defToWord' | 'wordToDef'
-
-export interface Question {
-  type: QuestionType
-  word: Word
-  /** Exactly 4 options including `word`, in display order */
-  options: Word[]
-  isReview: boolean
+/** What persists for the in-progress / finished day */
+export interface GameSave {
+  puzzleNo: number
+  guesses: string[]
+  status: GameStatus
 }

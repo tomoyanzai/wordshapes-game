@@ -1,37 +1,58 @@
-import type { PlayerState } from '../game/types'
+import { emptyStats } from '../game/stats'
+import type { GameSave, Stats } from '../game/types'
 
-const KEY = 'wordshapes:v1'
+const GAME_KEY = 'wordshapes:v2:game'
+const STATS_KEY = 'wordshapes:v2:stats'
+const HELP_KEY = 'wordshapes:v2:seenHelp'
 
-export function freshPlayerState(): PlayerState {
-  return {
-    version: 1,
-    xp: 0,
-    streak: 0,
-    bestStreak: 0,
-    lastCompletedPackDate: null,
-    wordProgress: {},
-    settings: { reducedMotion: false },
+function read<T>(key: string): T | null {
+  try {
+    const raw = localStorage.getItem(key)
+    return raw === null ? null : (JSON.parse(raw) as T)
+  } catch {
+    return null
   }
 }
 
-/** Corruption or version mismatch falls back to a fresh state rather than crashing. */
-export function loadPlayerState(): PlayerState {
+function write(key: string, value: unknown): void {
   try {
-    const raw = localStorage.getItem(KEY)
-    if (raw === null) return freshPlayerState()
-    const parsed: unknown = JSON.parse(raw)
-    if (typeof parsed !== 'object' || parsed === null) return freshPlayerState()
-    if ((parsed as { version?: unknown }).version !== 1) return freshPlayerState()
-    return { ...freshPlayerState(), ...(parsed as Partial<PlayerState>), version: 1 }
+    localStorage.setItem(key, JSON.stringify(value))
   } catch {
-    return freshPlayerState()
+    // private mode / quota: play on in memory
   }
 }
 
-export function savePlayerState(state: PlayerState): void {
+/** Returns the saved board only if it belongs to today's puzzle. */
+export function loadGameSave(puzzleNo: number): GameSave | null {
+  const save = read<GameSave>(GAME_KEY)
+  return save !== null && save.puzzleNo === puzzleNo && Array.isArray(save.guesses) ? save : null
+}
+
+export function saveGame(save: GameSave): void {
+  write(GAME_KEY, save)
+}
+
+export function loadStats(): Stats {
+  const stats = read<Stats>(STATS_KEY)
+  return stats !== null && Array.isArray(stats.dist) ? { ...emptyStats(), ...stats } : emptyStats()
+}
+
+export function saveStats(stats: Stats): void {
+  write(STATS_KEY, stats)
+}
+
+export function hasSeenHelp(): boolean {
   try {
-    localStorage.setItem(KEY, JSON.stringify(state))
+    return localStorage.getItem(HELP_KEY) === '1'
   } catch {
-    // quota/private-mode failures are non-fatal: the game keeps playing in memory
+    return true
+  }
+}
+
+export function markHelpSeen(): void {
+  try {
+    localStorage.setItem(HELP_KEY, '1')
+  } catch {
+    // non-fatal
   }
 }

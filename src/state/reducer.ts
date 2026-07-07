@@ -1,129 +1,92 @@
-import { WORDS } from '../data/words'
-import { dayNumber } from '../game/dates'
-import { buildDailySession } from '../game/quiz'
-import { packBonus, pointsForAnswer } from '../game/scoring'
-import { applyAnswer } from '../game/srs'
-import { updateStreakOnPackComplete } from '../game/streak'
-import type { PlayerState, Question } from '../game/types'
+import { isValidWord } from '../game/dictionary'
+import { shapeOf, silhouette, SHAPE_LABEL } from '../game/shapes'
+import { applyResult } from '../game/stats'
+import type { GameStatus, Puzzle, Stats } from '../game/types'
 
-export type Screen = 'home' | 'quiz' | 'summary' | 'words'
-export type Phase = 'question' | 'feedback' | 'reveal'
-
-export interface Session {
-  /** Snapshotted at pack start so a midnight crossover mid-pack can't shift the day */
-  dateStr: string
-  /** True if this is the first completion of this date's pack (streak/bonus apply) */
-  countsForStreak: boolean
-  questions: Question[]
-  index: number
-  combo: number
-  score: number
-  bonus: number
-  results: { wordId: string; correct: boolean }[]
-  phase: Phase
-  selectedId: string | null
-}
+export type Modal = 'help' | 'result' | null
 
 export interface AppState {
-  player: PlayerState
-  screen: Screen
-  session: Session | null
+  puzzleNo: number
+  puzzle: Puzzle
+  guesses: string[]
+  current: string
+  status: GameStatus
+  stats: Stats
+  /** id lets the same message re-trigger the toast animation */
+  notice: { msg: string; id: number } | null
+  modal: Modal
+  /** true while the win/lose row animation plays, before the result modal */
+  revealing: boolean
 }
 
 export type Action =
-  | { type: 'START_PACK'; dateStr: string }
-  | { type: 'ANSWER'; optionId: string }
-  | { type: 'ADVANCE' }
-  | { type: 'GO_HOME' }
-  | { type: 'GO_WORDS' }
-  | { type: 'RESET_PROGRESS'; fresh: PlayerState }
+  | { type: 'TYPE'; letter: string }
+  | { type: 'BACKSPACE' }
+  | { type: 'SUBMIT' }
+  | { type: 'REVEAL_DONE' }
+  | { type: 'SHOW_MODAL'; modal: Exclude<Modal, null> }
+  | { type: 'CLOSE_MODAL' }
+  | { type: 'CLEAR_NOTICE' }
+
+let noticeId = 0
+const notice = (msg: string) => ({ msg, id: ++noticeId })
 
 export function appReducer(state: AppState, action: Action): AppState {
   switch (action.type) {
-    case 'START_PACK': {
-      const questions = buildDailySession(action.dateStr, WORDS, state.player.wordProgress)
-      if (questions.length === 0) return { ...state, screen: 'home' }
+    case 'TYPE': {
+      if (state.status !== 'playing' || state.modal !== null) return state
+      const len = state.puzzle.word.length
+      if (state.current.length >= len) return state
+      const required = silhouette(state.puzzle.word)[state.current.length]
+      if (shapeOf(action.letter) !== required) {
+        return { ...state, notice: notice(`This spot needs ${SHAPE_LABEL[required]}`) }
+      }
+      return { ...state, current: state.current + action.letter }
+    }
+
+    case 'BACKSPACE': {
+      if (state.status !== 'playing' || state.modal !== null) return state
+      return { ...state, current: state.current.slice(0, -1) }
+    }
+
+    case 'SUBMIT': {
+      if (state.status !== 'playing' || state.modal !== null) return state
+      const answer = state.puzzle.word
+      if (state.current.length < answer.length) {
+        return { ...state, notice: notice('Not enough letters') }
+      }
+      if (!isValidWord(state.current)) {
+        return { ...state, notice: notice('Not in word list') }
+      }
+      const guesses = [...state.guesses, state.current]
+      const won = state.current === answer
+      const lost = !won && guesses.length >= 6
+      const status: GameStatus = won ? 'won' : lost ? 'lost' : 'playing'
       return {
         ...state,
-        screen: 'quiz',
-        session: {
-          dateStr: action.dateStr,
-          countsForStreak: state.player.lastCompletedPackDate !== action.dateStr,
-          questions,
-          index: 0,
-          combo: 0,
-          score: 0,
-          bonus: 0,
-          results: [],
-          phase: 'question',
-          selectedId: null,
-        },
+        guesses,
+        current: '',
+        status,
+        revealing: status !== 'playing',
+        stats:
+          status === 'playing'
+            ? state.stats
+            : applyResult(state.stats, state.puzzleNo, won, guesses.length),
       }
     }
 
-    case 'ANSWER': {
-      const { session, player } = state
-      if (!session || session.phase !== 'question') return state
-      const q = session.questions[session.index]
-      const correct = action.optionId === q.word.id
-      const todayDay = dayNumber(session.dateStr)
-      const gained = correct ? pointsForAnswer(session.combo) : 0
-      return {
-        ...state,
-        player: {
-          ...player,
-          xp: player.xp + gained,
-          wordProgress: {
-            ...player.wordProgress,
-            [q.word.id]: applyAnswer(player.wordProgress[q.word.id], correct, todayDay),
-          },
-        },
-        session: {
-          ...session,
-          phase: 'feedback',
-          selectedId: action.optionId,
-          combo: correct ? session.combo + 1 : 0,
-          score: session.score + gained,
-          results: [...session.results, { wordId: q.word.id, correct }],
-        },
-      }
-    }
+    case 'REVEAL_DONE':
+      if (!state.revealing) return state
+      return { ...state, revealing: false, modal: 'result' }
 
-    case 'ADVANCE': {
-      const { session, player } = state
-      if (!session) return state
-      if (session.phase === 'question') return state
-      // Iconic words get their shape-reveal interstitial before moving on
-      if (session.phase === 'feedback' && session.questions[session.index].word.iconic) {
-        return { ...state, session: { ...session, phase: 'reveal' } }
-      }
-      const next = session.index + 1
-      if (next < session.questions.length) {
-        return {
-          ...state,
-          session: { ...session, index: next, phase: 'question', selectedId: null },
-        }
-      }
-      // Pack complete: bonus + streak apply only on the first completion of the day
-      const correctCount = session.results.filter((r) => r.correct).length
-      const bonus = session.countsForStreak ? packBonus(correctCount, session.results.length) : 0
-      const streakSlice = updateStreakOnPackComplete(player, session.dateStr)
-      return {
-        ...state,
-        screen: 'summary',
-        player: { ...player, ...streakSlice, xp: player.xp + bonus },
-        session: { ...session, bonus },
-      }
-    }
+    case 'SHOW_MODAL':
+      return { ...state, modal: action.modal }
 
-    case 'GO_HOME':
-      return { ...state, screen: 'home', session: state.screen === 'summary' ? null : state.session }
+    case 'CLOSE_MODAL':
+      return { ...state, modal: null }
 
-    case 'GO_WORDS':
-      return { ...state, screen: 'words' }
-
-    case 'RESET_PROGRESS':
-      return { player: action.fresh, screen: 'home', session: null }
+    case 'CLEAR_NOTICE':
+      return { ...state, notice: null }
 
     default:
       return state
