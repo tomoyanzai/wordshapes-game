@@ -6,26 +6,26 @@ export function emptyStats(): Stats {
     won: 0,
     currentStreak: 0,
     maxStreak: 0,
-    dist: [0, 0, 0, 0, 0, 0],
-    lastWonPuzzle: null,
-    lastPlayedPuzzle: null,
+    dist: Array(13).fill(0), // wins by turns used (1..12); [12] = losses
+    lastWonDay: null,
+    lastPlayedDay: null,
   }
 }
 
 /**
- * Records a finished puzzle. Idempotent per puzzle number. The streak
- * counts wins on consecutive puzzle numbers (i.e., consecutive days);
- * a loss or a skipped day breaks it.
+ * Records a finished day. Idempotent per day number. The streak counts
+ * wins on consecutive days; a loss or a skipped day breaks it.
  */
-export function applyResult(stats: Stats, puzzleNo: number, won: boolean, guessCount: number): Stats {
-  if (stats.lastPlayedPuzzle === puzzleNo) return stats
-  const dist = [...stats.dist] as Stats['dist']
-  let { currentStreak, lastWonPuzzle } = stats
+export function applyResult(stats: Stats, dayNo: number, won: boolean, turnsUsed: number): Stats {
+  if (stats.lastPlayedDay === dayNo) return stats
+  const dist = [...stats.dist]
+  let { currentStreak, lastWonDay } = stats
   if (won) {
-    dist[Math.min(guessCount, 6) - 1]++
-    currentStreak = lastWonPuzzle === puzzleNo - 1 ? currentStreak + 1 : 1
-    lastWonPuzzle = puzzleNo
+    dist[Math.min(Math.max(turnsUsed, 1), 12) - 1]++
+    currentStreak = lastWonDay === dayNo - 1 ? currentStreak + 1 : 1
+    lastWonDay = dayNo
   } else {
+    dist[12]++
     currentStreak = 0
   }
   return {
@@ -34,7 +34,7 @@ export function applyResult(stats: Stats, puzzleNo: number, won: boolean, guessC
     currentStreak,
     maxStreak: Math.max(stats.maxStreak, currentStreak),
     dist,
-    lastWonPuzzle,
-    lastPlayedPuzzle: puzzleNo,
+    lastWonDay,
+    lastPlayedDay: dayNo,
   }
 }

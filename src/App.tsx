@@ -1,18 +1,31 @@
-import { useEffect, useReducer, useRef, useState } from 'react'
-import { Board } from './components/Board'
+import { useEffect, useMemo, useReducer, useRef, useState } from 'react'
+import { BlankPickerModal } from './components/BlankPickerModal'
+import { DefinitionSheet } from './components/DefinitionSheet'
+import { GameBoard } from './components/GameBoard'
+import { GoalTray } from './components/GoalTray'
+import { HelperBar } from './components/HelperBar'
 import { HelpModal } from './components/HelpModal'
-import { Keyboard } from './components/Keyboard'
+import { Rack } from './components/Rack'
 import { ResultModal } from './components/ResultModal'
-import { Silhouette } from './components/Silhouette'
-import { puzzleFor } from './game/daily'
+import { SwapModal } from './components/SwapModal'
+import { gameNumberFor } from './game/daily'
 import { localDateString } from './game/dates'
-import { appReducer, type AppState } from './state/reducer'
+import { dictionaryReady, preloadDictionary } from './game/dictionary'
+import { validateGeometry, PLACEMENT_ERROR_TEXT } from './game/placement'
+import {
+  appReducer,
+  freshGame,
+  visibleGoals,
+  type Action,
+  type AppState,
+  type GameSlice,
+} from './state/reducer'
 import { hasSeenHelp, loadGameSave, loadStats, markHelpSeen, saveGame, saveStats } from './storage/storage'
 
 /**
- * The only place that reads the real clock for puzzle selection. In dev,
- * `?today=YYYY-MM-DD` overrides it so streaks and future puzzles can be
- * tested without waiting for actual tomorrows.
+ * The only place that reads the real clock for board selection. In dev,
+ * `?today=YYYY-MM-DD` overrides it so future boards and streaks can be
+ * tested without waiting for real tomorrows.
  */
 function getToday(): string {
   if (import.meta.env.DEV) {
@@ -23,121 +36,194 @@ function getToday(): string {
 }
 
 function initState(): AppState {
-  const { number, puzzle } = puzzleFor(getToday())
-  const save = loadGameSave(number)
-  const status = save?.status ?? 'playing'
+  const dateStr = getToday()
+  const dayNo = gameNumberFor(dateStr)
+  const game: GameSlice = loadGameSave(dayNo) ?? freshGame(dateStr, dayNo)
   return {
-    puzzleNo: number,
-    puzzle,
-    guesses: save?.guesses ?? [],
-    current: '',
-    status,
+    ...game,
     stats: loadStats(),
+    selectedTileId: null,
+    blankTarget: null,
     notice: null,
-    modal: hasSeenHelp() ? (status !== 'playing' ? 'result' : null) : 'help',
-    revealing: false,
+    modal: hasSeenHelp() ? (game.status !== 'playing' ? 'result' : null) : 'help',
   }
 }
 
+const gameSlice = (s: AppState): GameSlice => ({
+  dayNo: s.dayNo,
+  board: s.board,
+  bag: s.bag,
+  rack: s.rack,
+  pending: s.pending,
+  goalIds: s.goalIds,
+  cleared: s.cleared,
+  rerolled: s.rerolled,
+  turnsUsed: s.turnsUsed,
+  helpers: s.helpers,
+  history: s.history,
+  status: s.status,
+})
+
 export default function App() {
   const [state, dispatch] = useReducer(appReducer, undefined, initState)
-  const [shake, setShake] = useState(0)
+  const [dictReady, setDictReady] = useState(dictionaryReady())
+  const [definitionWord, setDefinitionWord] = useState<string | null>(null)
   const lastNotice = useRef(0)
 
-  // persist board + stats
   useEffect(() => {
-    saveGame({ puzzleNo: state.puzzleNo, guesses: state.guesses, status: state.status })
-  }, [state.puzzleNo, state.guesses, state.status])
+    void preloadDictionary().then(() => setDictReady(true))
+  }, [])
+
+  // persist game + stats on every commit
+  useEffect(() => {
+    saveGame(gameSlice(state))
+  }, [state.board, state.bag, state.rack, state.cleared, state.rerolled, state.turnsUsed, state.helpers, state.history, state.status]) // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     saveStats(state.stats)
   }, [state.stats])
 
-  // notices: shake the live row and auto-clear
+  // auto-clear notices
   useEffect(() => {
     if (state.notice === null || state.notice.id === lastNotice.current) return
     lastNotice.current = state.notice.id
-    setShake((n) => n + 1)
-    const t = setTimeout(() => dispatch({ type: 'CLEAR_NOTICE' }), 1800)
+    const t = setTimeout(() => dispatch({ type: 'CLEAR_NOTICE' }), 2200)
     return () => clearTimeout(t)
   }, [state.notice])
 
-  // after the last row flips, open the result modal
-  useEffect(() => {
-    if (!state.revealing) return
-    const t = setTimeout(() => dispatch({ type: 'REVEAL_DONE' }), 1900)
-    return () => clearTimeout(t)
-  }, [state.revealing])
-
-  // physical keyboard
-  useEffect(() => {
-    const onKeyDown = (e: KeyboardEvent) => {
-      if (e.metaKey || e.ctrlKey || e.altKey) return
-      if (e.key === 'Enter') dispatch({ type: 'SUBMIT' })
-      else if (e.key === 'Backspace') dispatch({ type: 'BACKSPACE' })
-      else if (/^[a-zA-Z]$/.test(e.key)) dispatch({ type: 'TYPE', letter: e.key.toLowerCase() })
+  // live geometry preview for the staged tiles
+  const preview = useMemo(() => {
+    if (state.pending.length === 0) return null
+    const geo = validateGeometry(state.board, state.pending)
+    if (geo.ok) {
+      const main = geo.words.find((w) => w.isMain)
+      return { ok: true as const, text: geo.words.map((w) => w.word.toUpperCase()).join(' · '), main: main?.word }
     }
-    window.addEventListener('keydown', onKeyDown)
-    return () => window.removeEventListener('keydown', onKeyDown)
-  }, [])
+    return { ok: false as const, text: PLACEMENT_ERROR_TEXT[geo.error.code] }
+  }, [state.board, state.pending])
 
-  const onKey = (key: string) => {
-    if (key === 'enter') dispatch({ type: 'SUBMIT' })
-    else if (key === 'backspace') dispatch({ type: 'BACKSPACE' })
-    else dispatch({ type: 'TYPE', letter: key })
-  }
-
-  const closeModal = () => {
-    if (state.modal === 'help') markHelpSeen()
-    dispatch({ type: 'CLOSE_MODAL' })
-  }
+  const visible = visibleGoals(state)
+  const act = (a: Action) => dispatch(a)
+  const lastPlayWords = state.history[state.history.length - 1]?.words ?? []
 
   return (
     <div className="app">
       <header className="topbar">
-        <button className="icon-btn" aria-label="How to play" onClick={() => dispatch({ type: 'SHOW_MODAL', modal: 'help' })}>
+        <button className="icon-btn" aria-label="How to play" onClick={() => act({ type: 'SHOW_MODAL', modal: 'help' })}>
           ?
         </button>
-        <h1 className="wordmark">wordshapes</h1>
-        <button className="icon-btn" aria-label="Statistics" onClick={() => dispatch({ type: 'SHOW_MODAL', modal: 'result' })}>
+        <h1 className="wordmark">wordgather</h1>
+        <button className="icon-btn" aria-label="Statistics" onClick={() => act({ type: 'SHOW_MODAL', modal: 'result' })}>
           ▦
         </button>
       </header>
 
       <main className="play">
-        <div className="clue-bar">
-          <span className="puzzle-no">#{state.puzzleNo}</span>
-          <p className="clue">{state.puzzle.clue}</p>
+        <GoalTray
+          visible={visible}
+          clearedCount={state.cleared.length}
+          canReroll={state.helpers.reroll && state.status === 'playing'}
+          onReroll={(goalId) => act({ type: 'USE_REROLL', goalId })}
+        />
+
+        <GameBoard
+          board={state.board}
+          pending={state.pending}
+          lastTurn={state.turnsUsed}
+          onTapCell={(index) => act({ type: 'TAP_CELL', index })}
+        />
+
+        <div className={`preview ${preview === null ? '' : preview.ok ? 'preview-ok' : 'preview-bad'}`}>
+          {preview !== null
+            ? preview.text
+            : state.status === 'playing'
+              ? lastPlayWords.length > 0
+                ? lastPlayWords.map((w) => (
+                    <button key={w} className="wordchip wordchip-inline" onClick={() => setDefinitionWord(w)}>
+                      {w}
+                    </button>
+                  ))
+                : 'Tap a tile, then a square'
+              : 'Done for today'}
         </div>
-        <Silhouette word={state.puzzle.word} />
-        <Board
-          answer={state.puzzle.word}
-          guesses={state.guesses}
-          current={state.current}
-          animateRow={state.guesses.length - 1}
-          shakeRow={shake > 0 && state.notice !== null}
+
+        <Rack
+          rack={state.rack}
+          pending={state.pending}
+          selectedTileId={state.selectedTileId}
+          onSelect={(tileId) => act({ type: 'SELECT_TILE', tileId })}
         />
-        <Keyboard
-          answer={state.puzzle.word}
-          guesses={state.guesses}
-          current={state.current}
-          status={state.status}
-          onKey={onKey}
+
+        <div className="actionbar">
+          <button className="btn-ghost" disabled={state.pending.length === 0} onClick={() => act({ type: 'RECALL_ALL' })}>
+            ↩ recall
+          </button>
+          <button className="btn-ghost" onClick={() => act({ type: 'SHUFFLE_RACK', seed: Math.floor(Math.random() * 1e9) })}>
+            ⤨ mix
+          </button>
+          <button
+            className="btn-primary btn-submit"
+            disabled={state.status !== 'playing' || state.pending.length === 0 || !dictReady || preview?.ok !== true}
+            onClick={() => act({ type: 'SUBMIT_PLAY' })}
+          >
+            {dictReady ? 'Play word' : 'Loading…'}
+          </button>
+        </div>
+
+        <HelperBar
+          helpers={state.helpers}
+          turnsUsed={state.turnsUsed}
+          onSwap={() => act({ type: 'SHOW_MODAL', modal: 'swap' })}
+          onBlank={() => {
+            const target = state.rack.find((t) => t.letter !== '?' && !state.pending.some((p) => p.tile.id === t.id))
+            if (target !== undefined) act({ type: 'USE_BLANK', tileId: state.selectedTileId ?? target.id })
+          }}
         />
+
+        {state.status === 'playing' && state.turnsUsed > 0 && (
+          <button
+            className="concede"
+            onClick={() => {
+              if (window.confirm('Give up on today’s board?')) act({ type: 'CONCEDE' })
+            }}
+          >
+            concede
+          </button>
+        )}
       </main>
 
       {state.notice !== null && <div className="toast">{state.notice.msg}</div>}
 
-      {state.modal === 'help' && <HelpModal onClose={closeModal} />}
-      {state.modal === 'result' && (
-        <ResultModal
-          puzzleNo={state.puzzleNo}
-          puzzle={state.puzzle}
-          guesses={state.guesses}
-          status={state.status}
-          stats={state.stats}
-          onClose={closeModal}
+      {state.modal === 'help' && (
+        <HelpModal
+          onClose={() => {
+            markHelpSeen()
+            act({ type: 'CLOSE_MODAL' })
+          }}
         />
       )}
+      {state.modal === 'result' && (
+        <ResultModal
+          gameNo={state.dayNo}
+          game={gameSlice(state)}
+          stats={state.stats}
+          onWordTap={(w) => setDefinitionWord(w)}
+          onClose={() => act({ type: 'CLOSE_MODAL' })}
+        />
+      )}
+      {state.modal === 'swap' && (
+        <SwapModal
+          rack={state.rack}
+          onConfirm={(tileIds) => act({ type: 'USE_SWAP', tileIds })}
+          onClose={() => act({ type: 'CLOSE_MODAL' })}
+        />
+      )}
+      {state.modal === 'blank' && (
+        <BlankPickerModal
+          onPick={(as) => act({ type: 'PLACE_BLANK', as })}
+          onClose={() => act({ type: 'CLOSE_MODAL' })}
+        />
+      )}
+      {definitionWord !== null && <DefinitionSheet word={definitionWord} onClose={() => setDefinitionWord(null)} />}
     </div>
   )
 }

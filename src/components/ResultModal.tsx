@@ -1,20 +1,20 @@
 import { useEffect, useState } from 'react'
+import { GOALS_TO_WIN } from '../game/generate'
 import { shareText } from '../game/share'
-import type { GameStatus, Puzzle, Stats } from '../game/types'
+import type { Stats } from '../game/types'
+import type { GameSlice } from '../state/reducer'
 
 interface Props {
-  puzzleNo: number
-  puzzle: Puzzle
-  guesses: string[]
-  status: GameStatus
+  gameNo: number
+  game: GameSlice
   stats: Stats
+  onWordTap: (word: string) => void
   onClose: () => void
 }
 
 function msToNextMidnight(): number {
   const now = new Date()
-  const next = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1)
-  return next.getTime() - now.getTime()
+  return new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1).getTime() - now.getTime()
 }
 
 function Countdown() {
@@ -32,16 +32,17 @@ function Countdown() {
   )
 }
 
-/** Doubles as the stats screen mid-game (no dossier/share until finished). */
-export function ResultModal({ puzzleNo, puzzle, guesses, status, stats, onClose }: Props) {
+/** Doubles as the stats screen mid-game (no verdict/share until finished). */
+export function ResultModal({ gameNo, game, stats, onWordTap, onClose }: Props) {
   const [copied, setCopied] = useState(false)
-  const finished = status !== 'playing'
-  const iconic = new Set(puzzle.iconicIndices ?? [])
+  const finished = game.status !== 'playing'
   const winPct = stats.played > 0 ? Math.round((100 * stats.won) / stats.played) : 0
-  const maxDist = Math.max(1, ...stats.dist)
+  const wordsMet = [...new Set(game.history.flatMap((h) => h.words))].filter((w) => w.length >= 3)
+  const distWins = stats.dist.slice(0, 12)
+  const maxDist = Math.max(1, ...distWins)
 
   const share = async () => {
-    const text = shareText(puzzleNo, guesses, puzzle.word, status === 'won')
+    const text = shareText(gameNo, game)
     try {
       if (navigator.share !== undefined) {
         await navigator.share({ text })
@@ -55,7 +56,7 @@ export function ResultModal({ puzzleNo, puzzle, guesses, status, stats, onClose 
       setCopied(true)
       setTimeout(() => setCopied(false), 2000)
     } catch {
-      // clipboard unavailable: nothing sensible to do
+      // clipboard unavailable
     }
   }
 
@@ -67,20 +68,14 @@ export function ResultModal({ puzzleNo, puzzle, guesses, status, stats, onClose 
         </button>
 
         {finished && (
-          <section className="dossier">
-            <p className="dossier-verdict">{status === 'won' ? 'Solved' : 'The word was'}</p>
-            <p className="dossier-word">
-              {[...puzzle.word].map((ch, i) => (
-                <span key={i} className={iconic.has(i) ? 'dossier-letter dossier-iconic' : 'dossier-letter'}>
-                  {ch}
-                </span>
-              ))}
+          <section className="verdict">
+            <p className="verdict-title">
+              {game.status === 'won' ? 'All goals gathered' : 'Out of turns'}
             </p>
-            <p className="dossier-clue">
-              {puzzle.clue} <span className="level-chip">{puzzle.level}</span>
+            <p className="verdict-line">
+              {game.cleared.length}/{GOALS_TO_WIN} goals
+              {game.status === 'won' ? ` in ${game.turnsUsed} turn${game.turnsUsed === 1 ? '' : 's'}` : ''}
             </p>
-            <p className="dossier-example">“{puzzle.exampleSentence}”</p>
-            {puzzle.shapeNote !== undefined && <p className="dossier-note">◆ {puzzle.shapeNote}</p>}
           </section>
         )}
 
@@ -105,11 +100,11 @@ export function ResultModal({ puzzleNo, puzzle, guesses, status, stats, onClose 
             </div>
           </div>
           <div className="dist">
-            {stats.dist.map((n, i) => (
+            {distWins.map((n, i) => (
               <div key={i} className="dist-row">
                 <span className="dist-label">{i + 1}</span>
                 <span
-                  className={`dist-bar ${finished && status === 'won' && guesses.length === i + 1 ? 'dist-bar-latest' : ''}`}
+                  className={`dist-bar ${finished && game.status === 'won' && game.turnsUsed === i + 1 ? 'dist-bar-latest' : ''}`}
                   style={{ width: `${Math.max(7, (100 * n) / maxDist)}%` }}
                 >
                   {n}
@@ -119,10 +114,24 @@ export function ResultModal({ puzzleNo, puzzle, guesses, status, stats, onClose 
           </div>
         </section>
 
+        {finished && wordsMet.length > 0 && (
+          <section className="recap">
+            <h3>Words you met</h3>
+            <div className="recap-words">
+              {wordsMet.map((w) => (
+                <button key={w} className="wordchip" onClick={() => onWordTap(w)}>
+                  {w}
+                </button>
+              ))}
+            </div>
+            <p className="recap-hint">Tap a word for its meaning.</p>
+          </section>
+        )}
+
         {finished && (
           <section className="result-actions">
             <div className="next-puzzle">
-              <span>Next word</span>
+              <span>Next board</span>
               <Countdown />
             </div>
             <button className="share-btn" onClick={share}>

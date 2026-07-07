@@ -1,9 +1,10 @@
 import { emptyStats } from '../game/stats'
-import type { GameSave, Stats } from '../game/types'
+import type { Stats } from '../game/types'
+import type { GameSlice } from '../state/reducer'
 
-const GAME_KEY = 'wordshapes:v2:game'
-const STATS_KEY = 'wordshapes:v2:stats'
-const HELP_KEY = 'wordshapes:v2:seenHelp'
+const GAME_KEY = 'wordgather:v1:game'
+const STATS_KEY = 'wordgather:v1:stats'
+const HELP_KEY = 'wordgather:v1:seenHelp'
 
 function read<T>(key: string): T | null {
   try {
@@ -22,19 +23,23 @@ function write(key: string, value: unknown): void {
   }
 }
 
-/** Returns the saved board only if it belongs to today's puzzle. */
-export function loadGameSave(puzzleNo: number): GameSave | null {
-  const save = read<GameSave>(GAME_KEY)
-  return save !== null && save.puzzleNo === puzzleNo && Array.isArray(save.guesses) ? save : null
+/** Returns the saved game only if it belongs to today. */
+export function loadGameSave(dayNo: number): GameSlice | null {
+  const save = read<GameSlice>(GAME_KEY)
+  return save !== null && save.dayNo === dayNo && Array.isArray(save.board) && save.board.length === 81
+    ? save
+    : null
 }
 
-export function saveGame(save: GameSave): void {
-  write(GAME_KEY, save)
+export function saveGame(slice: GameSlice): void {
+  write(GAME_KEY, slice)
 }
 
 export function loadStats(): Stats {
   const stats = read<Stats>(STATS_KEY)
-  return stats !== null && Array.isArray(stats.dist) ? { ...emptyStats(), ...stats } : emptyStats()
+  return stats !== null && Array.isArray(stats.dist) && stats.dist.length === 13
+    ? { ...emptyStats(), ...stats }
+    : emptyStats()
 }
 
 export function saveStats(stats: Stats): void {

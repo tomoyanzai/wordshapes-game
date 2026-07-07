@@ -1,11 +1,12 @@
-import { PUZZLE_WORDS } from '../data/puzzles'
-
 let dict: Set<string> | null = null
 let loading: Promise<void> | null = null
 
 /**
- * The 74k-word guess dictionary loads as its own async chunk so it never
- * blocks first paint. Kick this off at app start.
+ * The 157k-word dictionary (2–9 letters) loads as its own async chunk so
+ * it never blocks first paint. Kick this off at app start; the UI gates
+ * Submit on `dictionaryReady()` — there is deliberately NO optimistic
+ * fallback here, because an invalid word would be committed to the board
+ * permanently.
  */
 export function preloadDictionary(): Promise<void> {
   loading ??= import('../data/dictionary').then((m) => {
@@ -14,9 +15,10 @@ export function preloadDictionary(): Promise<void> {
   return loading
 }
 
-/** Valid guesses: every puzzle answer, plus the bundled 4–7 letter dictionary. */
+export function dictionaryReady(): boolean {
+  return dict !== null
+}
+
 export function isValidWord(word: string): boolean {
-  if (PUZZLE_WORDS.has(word)) return true
-  // dictionary still in flight (first seconds of a cold load): don't block play
-  return dict === null ? true : dict.has(word)
+  return dict !== null && dict.has(word)
 }
