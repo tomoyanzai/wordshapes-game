@@ -6,7 +6,8 @@ export function emptyStats(): Stats {
     won: 0,
     currentStreak: 0,
     maxStreak: 0,
-    dist: Array(13).fill(0), // wins by turns used (1..12); [12] = losses
+    dist: Array(6).fill(0), // wins by probes used (1..6)
+    losses: 0,
     lastWonDay: null,
     lastPlayedDay: null,
   }
@@ -16,16 +17,16 @@ export function emptyStats(): Stats {
  * Records a finished day. Idempotent per day number. The streak counts
  * wins on consecutive days; a loss or a skipped day breaks it.
  */
-export function applyResult(stats: Stats, dayNo: number, won: boolean, turnsUsed: number): Stats {
+export function applyResult(stats: Stats, dayNo: number, won: boolean, probesUsed: number): Stats {
   if (stats.lastPlayedDay === dayNo) return stats
   const dist = [...stats.dist]
-  let { currentStreak, lastWonDay } = stats
+  let { currentStreak, lastWonDay, losses } = stats
   if (won) {
-    dist[Math.min(Math.max(turnsUsed, 1), 12) - 1]++
+    dist[Math.min(Math.max(probesUsed, 1), 6) - 1]++
     currentStreak = lastWonDay === dayNo - 1 ? currentStreak + 1 : 1
     lastWonDay = dayNo
   } else {
-    dist[12]++
+    losses++
     currentStreak = 0
   }
   return {
@@ -34,6 +35,7 @@ export function applyResult(stats: Stats, dayNo: number, won: boolean, turnsUsed
     currentStreak,
     maxStreak: Math.max(stats.maxStreak, currentStreak),
     dist,
+    losses,
     lastWonDay,
     lastPlayedDay: dayNo,
   }

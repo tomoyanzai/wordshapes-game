@@ -1,88 +1,78 @@
-import { useEffect, useMemo, useReducer, useRef, useState } from 'react'
-import { BlankPickerModal } from './components/BlankPickerModal'
-import { DefinitionSheet } from './components/DefinitionSheet'
-import { GameBoard } from './components/GameBoard'
-import { GoalTray } from './components/GoalTray'
-import { HelperBar } from './components/HelperBar'
-import { HelpModal } from './components/HelpModal'
-import { Rack } from './components/Rack'
-import { ResultModal } from './components/ResultModal'
-import { SwapModal } from './components/SwapModal'
-import { gameNumberFor } from './game/daily'
-import { localDateString } from './game/dates'
-import { dictionaryReady, preloadDictionary } from './game/dictionary'
-import { validateGeometry, PLACEMENT_ERROR_TEXT } from './game/placement'
-import {
-  appReducer,
-  freshGame,
-  visibleGoals,
-  type Action,
-  type AppState,
-  type GameSlice,
-} from './state/reducer'
+import { useEffect, useReducer, useRef, useState } from 'react'
+import { AnswerSheet } from './components/AnswerSheet'
+import { ClueChip } from './components/ClueChip'
+import { HowToModal } from './components/HowToModal'
+import { ProbeBudget } from './components/ProbeBudget'
+import { ResultPanel } from './components/ResultPanel'
+import { StatsModal } from './components/StatsModal'
+import { Toast } from './components/Toast'
+import { WordGrid } from './components/WordGrid'
+import { PUZZLES_BY_ID } from './data/puzzles'
+import { puzzleFor } from './game/daily'
+import { dayNumber, localDateString } from './game/dates'
+import { appReducer, freshGame, MAX_PROBES, type Action, type AppState, type GameSlice } from './state/reducer'
 import { hasSeenHelp, loadGameSave, loadStats, markHelpSeen, saveGame, saveStats } from './storage/storage'
 
 /**
- * The only place that reads the real clock for board selection. In dev,
- * `?today=YYYY-MM-DD` overrides it so future boards and streaks can be
+ * The only place that reads the real clock for puzzle selection. In dev,
+ * `?today=YYYY-MM-DD` overrides it so future puzzles and streaks can be
  * tested without waiting for real tomorrows.
  */
 function getToday(): string {
   if (import.meta.env.DEV) {
     const p = new URLSearchParams(window.location.search).get('today')
-    if (p && /^\d{4}-\d{2}-\d{2}$/.test(p)) return p
+    if (p !== null && /^\d{4}-\d{2}-\d{2}$/.test(p)) return p
   }
   return localDateString(new Date())
 }
 
 function initState(): AppState {
   const dateStr = getToday()
-  const dayNo = gameNumberFor(dateStr)
-  const game: GameSlice = loadGameSave(dayNo) ?? freshGame(dateStr, dayNo)
+  const dayNo = dayNumber(dateStr)
+  const { number, puzzle: todaysPuzzle } = puzzleFor(dateStr)
+  const game = loadGameSave(dayNo) ?? freshGame(dateStr)
+  // rehydrate the full puzzle from the saved id — falls back to today's
+  // puzzle if the id is unrecognized (shouldn't happen, but never crash)
+  const puzzle = PUZZLES_BY_ID.get(game.puzzleId) ?? todaysPuzzle
+
   return {
     ...game,
+    puzzle,
+    gameNo: number,
     stats: loadStats(),
-    selectedTileId: null,
-    blankTarget: null,
+    sheetOpen: false,
+    sheetForced: false,
+    howToOpen: !hasSeenHelp(),
     notice: null,
-    modal: hasSeenHelp() ? (game.status !== 'playing' ? 'result' : null) : 'help',
   }
 }
 
 const gameSlice = (s: AppState): GameSlice => ({
   dayNo: s.dayNo,
-  board: s.board,
-  bag: s.bag,
-  rack: s.rack,
-  pending: s.pending,
-  goalIds: s.goalIds,
-  cleared: s.cleared,
-  rerolled: s.rerolled,
-  turnsUsed: s.turnsUsed,
-  helpers: s.helpers,
-  history: s.history,
+  puzzleId: s.puzzleId,
+  probeOrder: s.probeOrder,
   status: s.status,
+  answer: s.answer,
 })
 
 export default function App() {
   const [state, dispatch] = useReducer(appReducer, undefined, initState)
-  const [dictReady, setDictReady] = useState(dictionaryReady())
-  const [definitionWord, setDefinitionWord] = useState<string | null>(null)
+  const [statsOpen, setStatsOpen] = useState(false)
   const lastNotice = useRef(0)
 
-  useEffect(() => {
-    void preloadDictionary().then(() => setDictReady(true))
-  }, [])
+  const act = (a: Action) => dispatch(a)
 
-  // persist game + stats on every commit
+  // persist the in-progress day's game on every relevant change
   useEffect(() => {
     saveGame(gameSlice(state))
-  }, [state.board, state.bag, state.rack, state.cleared, state.rerolled, state.turnsUsed, state.helpers, state.history, state.status]) // eslint-disable-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.dayNo, state.puzzleId, state.probeOrder, state.status, state.answer])
+
   useEffect(() => {
     saveStats(state.stats)
   }, [state.stats])
 
-  // auto-clear notices
+  // auto-clear notices a couple seconds after they appear
   useEffect(() => {
     if (state.notice === null || state.notice.id === lastNotice.current) return
     lastNotice.current = state.notice.id
@@ -90,140 +80,66 @@ export default function App() {
     return () => clearTimeout(t)
   }, [state.notice])
 
-  // live geometry preview for the staged tiles
-  const preview = useMemo(() => {
-    if (state.pending.length === 0) return null
-    const geo = validateGeometry(state.board, state.pending)
-    if (geo.ok) {
-      const main = geo.words.find((w) => w.isMain)
-      return { ok: true as const, text: geo.words.map((w) => w.word.toUpperCase()).join(' · '), main: main?.word }
-    }
-    return { ok: false as const, text: PLACEMENT_ERROR_TEXT[geo.error.code] }
-  }, [state.board, state.pending])
+  const closeHowTo = () => {
+    markHelpSeen()
+    act({ type: 'CLOSE_HOWTO' })
+  }
 
-  const visible = visibleGoals(state)
-  const act = (a: Action) => dispatch(a)
-  const lastPlayWords = state.history[state.history.length - 1]?.words ?? []
+  const remaining = MAX_PROBES - state.probeOrder.length
+  const gridLocked = state.sheetOpen || state.status !== 'playing'
 
   return (
-    <div className="app">
-      <header className="topbar">
-        <button className="icon-btn" aria-label="How to play" onClick={() => act({ type: 'SHOW_MODAL', modal: 'help' })}>
-          ?
-        </button>
+    <div className="page">
+      <header className="hdr">
+        <div className="eyebrow-row">
+          <button className="help-btn" type="button" aria-label="Statistics" onClick={() => setStatsOpen(true)}>
+            ▦
+          </button>
+          <p className="eyebrow">Twenty Words</p>
+          <button className="help-btn" type="button" aria-label="How to play" onClick={() => act({ type: 'SHOW_HOWTO' })}>
+            ?
+          </button>
+        </div>
         <h1 className="wordmark">wordgather</h1>
-        <button className="icon-btn" aria-label="Statistics" onClick={() => act({ type: 'SHOW_MODAL', modal: 'result' })}>
-          ▦
-        </button>
+        <p className="rules">Six probes to feel out the secret word. One chance to name it.</p>
+        <ClueChip clue={state.puzzle.clue} />
       </header>
 
-      <main className="play">
-        <GoalTray
-          visible={visible}
-          clearedCount={state.cleared.length}
-          canReroll={state.helpers.reroll && state.status === 'playing'}
-          onReroll={(goalId) => act({ type: 'USE_REROLL', goalId })}
-        />
+      <ProbeBudget probesUsed={state.probeOrder.length} max={MAX_PROBES} finished={state.status !== 'playing'} />
 
-        <GameBoard
-          board={state.board}
-          pending={state.pending}
-          lastTurn={state.turnsUsed}
-          onTapCell={(index) => act({ type: 'TAP_CELL', index })}
-        />
+      <WordGrid
+        puzzle={state.puzzle}
+        probeOrder={state.probeOrder}
+        locked={gridLocked}
+        onProbe={(index) => act({ type: 'PROBE', index })}
+      />
 
-        <div className={`preview ${preview === null ? '' : preview.ok ? 'preview-ok' : 'preview-bad'}`}>
-          {preview !== null
-            ? preview.text
-            : state.status === 'playing'
-              ? lastPlayWords.length > 0
-                ? lastPlayWords.map((w) => (
-                    <button key={w} className="wordchip wordchip-inline" onClick={() => setDefinitionWord(w)}>
-                      {w}
-                    </button>
-                  ))
-                : 'Tap a tile, then a square'
-              : 'Done for today'}
-        </div>
+      {state.status === 'playing' ? (
+        <button
+          className={`know-btn ${remaining <= 2 ? 'pulse' : ''}`}
+          type="button"
+          onClick={() => act({ type: 'OPEN_SHEET' })}
+        >
+          I know it
+        </button>
+      ) : (
+        <ResultPanel gameNo={state.gameNo} puzzle={state.puzzle} status={state.status} probeOrder={state.probeOrder} />
+      )}
 
-        <Rack
-          rack={state.rack}
-          pending={state.pending}
-          selectedTileId={state.selectedTileId}
-          onSelect={(tileId) => act({ type: 'SELECT_TILE', tileId })}
-        />
-
-        <div className="actionbar">
-          <button className="btn-ghost" disabled={state.pending.length === 0} onClick={() => act({ type: 'RECALL_ALL' })}>
-            ↩ recall
-          </button>
-          <button className="btn-ghost" onClick={() => act({ type: 'SHUFFLE_RACK', seed: Math.floor(Math.random() * 1e9) })}>
-            ⤨ mix
-          </button>
-          <button
-            className="btn-primary btn-submit"
-            disabled={state.status !== 'playing' || state.pending.length === 0 || !dictReady || preview?.ok !== true}
-            onClick={() => act({ type: 'SUBMIT_PLAY' })}
-          >
-            {dictReady ? 'Play word' : 'Loading…'}
-          </button>
-        </div>
-
-        <HelperBar
-          helpers={state.helpers}
-          turnsUsed={state.turnsUsed}
-          onSwap={() => act({ type: 'SHOW_MODAL', modal: 'swap' })}
-          onBlank={() => {
-            const target = state.rack.find((t) => t.letter !== '?' && !state.pending.some((p) => p.tile.id === t.id))
-            if (target !== undefined) act({ type: 'USE_BLANK', tileId: state.selectedTileId ?? target.id })
-          }}
-        />
-
-        {state.status === 'playing' && state.turnsUsed > 0 && (
-          <button
-            className="concede"
-            onClick={() => {
-              if (window.confirm('Give up on today’s board?')) act({ type: 'CONCEDE' })
-            }}
-          >
-            concede
-          </button>
-        )}
-      </main>
-
-      {state.notice !== null && <div className="toast">{state.notice.msg}</div>}
-
-      {state.modal === 'help' && (
-        <HelpModal
-          onClose={() => {
-            markHelpSeen()
-            act({ type: 'CLOSE_MODAL' })
-          }}
+      {state.sheetOpen && (
+        <AnswerSheet
+          puzzle={state.puzzle}
+          forced={state.sheetForced}
+          onSubmit={(value) => act({ type: 'ANSWER', value })}
+          onClose={() => act({ type: 'CLOSE_SHEET' })}
         />
       )}
-      {state.modal === 'result' && (
-        <ResultModal
-          gameNo={state.dayNo}
-          game={gameSlice(state)}
-          stats={state.stats}
-          onWordTap={(w) => setDefinitionWord(w)}
-          onClose={() => act({ type: 'CLOSE_MODAL' })}
-        />
-      )}
-      {state.modal === 'swap' && (
-        <SwapModal
-          rack={state.rack}
-          onConfirm={(tileIds) => act({ type: 'USE_SWAP', tileIds })}
-          onClose={() => act({ type: 'CLOSE_MODAL' })}
-        />
-      )}
-      {state.modal === 'blank' && (
-        <BlankPickerModal
-          onPick={(as) => act({ type: 'PLACE_BLANK', as })}
-          onClose={() => act({ type: 'CLOSE_MODAL' })}
-        />
-      )}
-      {definitionWord !== null && <DefinitionSheet word={definitionWord} onClose={() => setDefinitionWord(null)} />}
+
+      {state.howToOpen && <HowToModal onClose={closeHowTo} />}
+
+      {statsOpen && <StatsModal stats={state.stats} onClose={() => setStatsOpen(false)} />}
+
+      {state.notice !== null && <Toast message={state.notice.msg} />}
     </div>
   )
 }

@@ -2,9 +2,9 @@ import { emptyStats } from '../game/stats'
 import type { Stats } from '../game/types'
 import type { GameSlice } from '../state/reducer'
 
-const GAME_KEY = 'wordgather:v1:game'
-const STATS_KEY = 'wordgather:v1:stats'
-const HELP_KEY = 'wordgather:v1:seenHelp'
+const GAME_KEY = 'wordgather:tw:v1:game'
+const STATS_KEY = 'wordgather:tw:v1:stats'
+const HELP_KEY = 'wordgather:tw:v1:seenHelp'
 
 function read<T>(key: string): T | null {
   try {
@@ -23,12 +23,10 @@ function write(key: string, value: unknown): void {
   }
 }
 
-/** Returns the saved game only if it belongs to today. */
+/** Returns the saved game only if it belongs to the given day. */
 export function loadGameSave(dayNo: number): GameSlice | null {
   const save = read<GameSlice>(GAME_KEY)
-  return save !== null && save.dayNo === dayNo && Array.isArray(save.board) && save.board.length === 81
-    ? save
-    : null
+  return save !== null && save.dayNo === dayNo ? save : null
 }
 
 export function saveGame(slice: GameSlice): void {
@@ -37,7 +35,7 @@ export function saveGame(slice: GameSlice): void {
 
 export function loadStats(): Stats {
   const stats = read<Stats>(STATS_KEY)
-  return stats !== null && Array.isArray(stats.dist) && stats.dist.length === 13
+  return stats !== null && Array.isArray(stats.dist) && stats.dist.length === 6
     ? { ...emptyStats(), ...stats }
     : emptyStats()
 }
