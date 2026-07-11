@@ -35,6 +35,8 @@ export type Action =
   | { type: 'SHOW_HOWTO' }
   | { type: 'CLOSE_HOWTO' }
   | { type: 'CLEAR_NOTICE' }
+  /** Dev free-play only: drop a fresh puzzle onto the board as the "next day". */
+  | { type: 'NEW_GAME'; puzzle: Puzzle }
 
 export function freshGame(dateStr: string): GameSlice {
   const { puzzle } = puzzleFor(dateStr)
@@ -101,6 +103,24 @@ export function appReducer(state: AppState, action: Action): AppState {
 
     case 'CLEAR_NOTICE':
       return { ...state, notice: null }
+
+    case 'NEW_GAME':
+      // Advance dayNo/gameNo so streaks accumulate as if it were the next
+      // day — lets a developer feel the daily loop without waiting. Stats
+      // carry over; the play state resets.
+      return {
+        ...state,
+        puzzle: action.puzzle,
+        puzzleId: action.puzzle.id,
+        dayNo: state.dayNo + 1,
+        gameNo: state.gameNo + 1,
+        probeOrder: [],
+        status: 'playing',
+        answer: null,
+        sheetOpen: false,
+        sheetForced: false,
+        notice: null,
+      }
 
     default:
       return state

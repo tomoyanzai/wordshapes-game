@@ -9,6 +9,9 @@ interface Props {
   status: Exclude<GameStatus, 'playing'>
   /** indices into puzzle.words, in probe order */
   probeOrder: number[]
+  /** free-play mode: show a button to jump to the next puzzle now */
+  devMode?: boolean
+  onNext?: () => void
 }
 
 const TIER_GROUPS: { tier: Tier; label: string; pips: string }[] = [
@@ -51,7 +54,7 @@ function Countdown() {
   )
 }
 
-export function ResultPanel({ gameNo, puzzle, status, probeOrder }: Props) {
+export function ResultPanel({ gameNo, puzzle, status, probeOrder, devMode = false, onNext }: Props) {
   const [copied, setCopied] = useState(false)
   const won = status === 'won'
   const probesUsed = probeOrder.length
@@ -126,9 +129,15 @@ export function ResultPanel({ gameNo, puzzle, status, probeOrder }: Props) {
         {copied ? 'Copied!' : 'Share'}
       </button>
 
-      <p className="next-puzzle">
-        Next puzzle in <Countdown />
-      </p>
+      {devMode && onNext !== undefined ? (
+        <button className="dev-next-btn" type="button" onClick={onNext}>
+          Play next puzzle → <span className="dev-tag">free play</span>
+        </button>
+      ) : (
+        <p className="next-puzzle">
+          Next puzzle in <Countdown />
+        </p>
+      )}
     </section>
   )
 }
